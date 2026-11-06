@@ -1,11 +1,11 @@
-apiVersion: apps/v1
+﻿apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: campus-booking
   labels:
     app: campus-booking
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: campus-booking
@@ -16,8 +16,8 @@ spec:
     spec:
       containers:
         - name: campus-booking
-          image: ghcr.io/haricodex/campus-booking:latest
-          imagePullPolicy: Always
+          image: campus-booking:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081
           readinessProbe:

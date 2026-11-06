@@ -7,23 +7,37 @@
     - name: Apply Kubernetes deployment and service
       ansible.builtin.command:
         argv:
-          - kubectl
+          - kubectl.exe
           - apply
           - -f
           - k8s/
+        chdir: "{{ playbook_dir }}/.."
       register: apply_result
-      changed_when: "'configured' in apply_result.stdout or 'created' in apply_result.stdout"
+      changed_when: "'created' in apply_result.stdout or 'configured' in apply_result.stdout"
 
-    - name: Display Kubernetes apply result
+    - name: Display deployment result
       ansible.builtin.debug:
         var: apply_result.stdout_lines
 
     - name: Verify Campus Booking deployment
       ansible.builtin.command:
         argv:
-          - kubectl
+          - kubectl.exe
           - rollout
           - status
           - deployment/campus-booking
           - --timeout=120s
       changed_when: false
+
+    - name: Display Kubernetes pods
+      ansible.builtin.command:
+        argv:
+          - kubectl.exe
+          - get
+          - pods
+      register: pod_result
+      changed_when: false
+
+    - name: Show running pods
+      ansible.builtin.debug:
+        var: pod_result.stdout_lines
