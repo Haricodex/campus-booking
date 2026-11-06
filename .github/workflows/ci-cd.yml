@@ -97,7 +97,7 @@ jobs:
             ghcr.io/haricodex/campus-booking:latest
             ghcr.io/haricodex/campus-booking:${{ github.sha }}
 
-  # 5. Automatically deploy to Minikube
+  # 5. Automatically deploy to local Minikube
   deploy-to-kubernetes:
     name: Deploy to Minikube
     runs-on: self-hosted
@@ -111,10 +111,16 @@ jobs:
       - name: Verify Docker and Kubernetes
         shell: powershell
         run: |
+          $minikube = "C:\Program Files\Kubernetes\Minikube\minikube.exe"
+
           docker version
           kubectl config current-context
           kubectl get nodes
-          minikube status
+
+          & $minikube status
+          if ($LASTEXITCODE -ne 0) {
+            throw "Minikube is not running"
+          }
 
       - name: Login to GitHub Container Registry
         shell: powershell
@@ -124,21 +130,42 @@ jobs:
         run: |
           $env:GITHUB_TOKEN | docker login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "GHCR login failed"
+          }
+
       - name: Pull Docker image
         shell: powershell
         run: |
           docker pull ghcr.io/haricodex/campus-booking:${{ github.sha }}
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker image pull failed"
+          }
+
       - name: Load Docker image into Minikube
         shell: powershell
         run: |
-          minikube image load ghcr.io/haricodex/campus-booking:${{ github.sha }}
+          & "C:\Program Files\Kubernetes\Minikube\minikube.exe" image load ghcr.io/haricodex/campus-booking:${{ github.sha }}
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Minikube image load failed"
+          }
 
       - name: Deploy updated application
         shell: powershell
         run: |
           kubectl set image deployment/campus-booking campus-booking=ghcr.io/haricodex/campus-booking:${{ github.sha }}
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Kubernetes image update failed"
+          }
+
           kubectl rollout status deployment/campus-booking --timeout=180s
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Kubernetes rollout failed"
+          }
 
       - name: Verify running pods
         shell: powershell
@@ -147,13 +174,21 @@ jobs:
           kubectl get deployments
           kubectl get services
 
+          if ($LASTEXITCODE -ne 0) {
+            throw "Kubernetes resource verification failed"
+          }
+
       - name: Test deployed application
         shell: powershell
         run: |
-          $kubectl = (Get-Command kubectl).Source
+          $kubectl = (Get-Command kubectl.exe).Source
           $port = 18081
 
-          $process = Start-Process -FilePath $kubectl -ArgumentList @("port-forward", "service/campus-booking-service", "${port}:80") -PassThru -WindowStyle Hidden
+          $process = Start-Process -FilePath $kubectl -ArgumentList @(
+            "port-forward",
+            "service/campus-booking-service",
+            "${port}:80"
+          ) -PassThru -WindowStyle Hidden
 
           try {
             $success = $false
@@ -182,4 +217,3 @@ jobs:
               Stop-Process -Id $process.Id -Force
             }
           }
-
