@@ -14,6 +14,8 @@ permissions:
   packages: write
 
 jobs:
+
+  # 1. Security scanning using Gitleaks
   security-scan:
     name: Gitleaks Secret Scan
     runs-on: ubuntu-latest
@@ -28,6 +30,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # 2. Maven build and automated testing
   build:
     name: Maven Build and Test
     runs-on: ubuntu-latest
@@ -48,6 +51,7 @@ jobs:
           chmod +x mvnw
           ./mvnw -B clean verify
 
+  # 3. Ansible playbook validation
   ansible-validation:
     name: Ansible Playbook Validation
     runs-on: ubuntu-latest
@@ -67,6 +71,7 @@ jobs:
         run: |
           ansible-playbook -i ansible/inventory.ini ansible/deploy.yml --syntax-check
 
+  # 4. Build and publish Docker image
   docker-publish:
     name: Build and Publish Docker Image
     runs-on: ubuntu-latest
@@ -83,7 +88,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker Image
+      - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -91,3 +96,89 @@ jobs:
           tags: |
             ghcr.io/haricodex/campus-booking:latest
             ghcr.io/haricodex/campus-booking:${{ github.sha }}
+
+  # 5. Automatically deploy to Minikube
+  deploy-to-kubernetes:
+    name: Deploy to Minikube
+    runs-on: self-hosted
+    needs: docker-publish
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      - name: Verify Docker and Kubernetes
+        shell: pwsh
+        run: |
+          docker version
+          kubectl config current-context
+          kubectl get nodes
+          minikube status
+
+      - name: Login to GitHub Container Registry
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          $env:GITHUB_TOKEN | docker login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
+
+      - name: Pull Docker image
+        shell: pwsh
+        run: |
+          docker pull ghcr.io/haricodex/campus-booking:${{ github.sha }}
+
+      - name: Load Docker image into Minikube
+        shell: pwsh
+        run: |
+          minikube image load ghcr.io/haricodex/campus-booking:${{ github.sha }}
+
+      - name: Deploy updated application
+        shell: pwsh
+        run: |
+          kubectl set image deployment/campus-booking campus-booking=ghcr.io/haricodex/campus-booking:${{ github.sha }}
+          kubectl rollout status deployment/campus-booking --timeout=180s
+
+      - name: Verify running pods
+        shell: pwsh
+        run: |
+          kubectl get pods
+          kubectl get deployments
+          kubectl get services
+
+      - name: Test deployed application
+        shell: pwsh
+        run: |
+          $kubectl = (Get-Command kubectl).Source
+          $port = 18081
+
+          $process = Start-Process -FilePath $kubectl -ArgumentList @("port-forward", "service/campus-booking-service", "${port}:80") -PassThru -WindowStyle Hidden
+
+          try {
+            $success = $false
+
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 2
+
+              try {
+                $response = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/status" -TimeoutSec 3
+
+                if ($response.status -eq "running") {
+                  $response | ConvertTo-Json
+                  $success = $true
+                  break
+                }
+              }
+              catch {}
+            }
+
+            if (-not $success) {
+              throw "Campus Booking application endpoint verification failed"
+            }
+          }
+          finally {
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
